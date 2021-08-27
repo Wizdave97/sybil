@@ -1,10 +1,7 @@
 //! Service and ServiceFactory implementation. Specialized wrapper over substrate service.
 
 use codec::Encode;
-use futures::{
-	executor::block_on,
-	future::{select, Either},
-};
+use futures::executor::block_on;
 use rand::RngCore;
 use sc_client_api::ExecutorProvider;
 use sc_consensus::LongestChain;
@@ -279,9 +276,10 @@ pub fn new_full(config: Configuration) -> Result<TaskManager, ServiceError> {
 				let mut stream = WatchStream::new(rx_clone);
 				let mut item = futures::executor::block_on(stream.next()).flatten();
 
-				block_on(async {
+				// todo: benchmark the advantage of spin_on vs block_on.
+				spin_on::spin_on(async {
 					loop {
-						// figured  it out, we simply have to check once if there's a new item 
+						// figured  it out, we simply have to check once if there's a new item
 						// in the stream, otherwise we run compute in a hot loop
 						// this ensures that when a new block comes in, we immediately start building on it
 						if let Some(Some(new_item)) = poll_once(stream.next()).await {
