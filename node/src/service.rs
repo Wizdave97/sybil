@@ -1,16 +1,21 @@
 //! Service and ServiceFactory implementation. Specialized wrapper over substrate service.
 
 use codec::Encode;
+use futures::{
+	executor::block_on,
+	future::{select, Either},
+};
 use rand::RngCore;
 use sc_client_api::ExecutorProvider;
 use sc_consensus::LongestChain;
-use sc_consensus_pow::PowBlockImport;
+use sc_consensus_pow::{MiningData, PowBlockImport};
 use sc_executor::NativeElseWasmExecutor;
 use sc_keystore::LocalKeystore;
 use sc_service::{error::Error as ServiceError, Configuration, TFullCallExecutor, TaskManager};
 use sc_telemetry::{Telemetry, TelemetryWorker};
 use sha3::Digest;
 use sp_consensus::CanAuthorWithNativeVersion;
+use sp_core::{H256, U256};
 use sp_inherents::CreateInherentDataProviders;
 use sp_runtime::{traits::IdentifyAccount, MultiSigner};
 use std::thread;
@@ -267,65 +272,62 @@ pub fn new_full(config: Configuration) -> Result<TaskManager, ServiceError> {
 			can_author_with,
 		);
 
-		for _ in 0..4 {
+		for thread_id in 0..4 {
 			let rx_clone = rx.clone();
 			thread::spawn(move || {
+				use futures_lite::future::poll_once;
 				let mut stream = WatchStream::new(rx_clone);
-				let mut item = futures::executor::block_on(stream.next());
+				let mut item = futures::executor::block_on(stream.next()).flatten();
 
-				loop {
-					// this future tries to find a seal.
-					let item_clone = item.clone();
-					let mut rand = rand::thread_rng();
-
-					let seal = async move {
-						if let Some(Some(build)) = item_clone {
-							loop {
-								let mut nonce = sp_core::H256::default();
-								rand.fill_bytes(&mut nonce[..]);
-								let metadata = build.metadata.clone();
-
-								let compute = sybil_pow::Compute {
-									pre_hash: metadata.pre_hash,
-									difficulty: metadata.difficulty,
-									nonce,
-								};
-
-								let work = sp_core::U256::from(&*sha3::Sha3_256::digest(
-									&compute.encode()[..],
-								));
-
-								let (_, overflowed) = work.overflowing_mul(metadata.difficulty);
-
-								if !overflowed {
-									let seal = sybil_pow::SybilSeal {
-										nonce,
-										difficulty: metadata.difficulty,
-									};
-
-									let _res = build.sender.send(seal.encode()).await;
-									break;
-								}
-							}
-						}
-					};
-
-					match futures::executor::block_on(futures::future::select(
-						Box::pin(stream.next()),
-						Box::pin(seal),
-					)) {
-						futures::future::Either::Left((new_item, _)) => {
+				block_on(async {
+					loop {
+						// figured  it out, we simply have to check once if there's a new item 
+						// in the stream, otherwise we run compute in a hot loop
+						// this ensures that when a new block comes in, we immediately start building on it
+						if let Some(Some(new_item)) = poll_once(stream.next()).await {
 							item = new_item;
+							println!(
+								"thread {} got data: {:?}",
+								thread_id,
+								item.as_ref().map(|d| d.metadata.pre_hash)
+							);
 						}
-						_ => {}
+
+						compute(&item, thread_id).await
 					}
-				}
+				});
 			});
 		}
 
-		task_manager.spawn_essential_handle().spawn("mining-task", authorship_task);
+		task_manager.spawn_handle().spawn("mining-task", authorship_task);
 	}
 
 	network_starter.start_network();
 	Ok(task_manager)
+}
+
+pub async fn compute(build: &Option<MiningData<H256, U256>>, num: i32) {
+	if let Some(build) = build {
+		let mut rand = rand::thread_rng();
+		let mut nonce = sp_core::H256::default();
+		rand.fill_bytes(&mut nonce[..]);
+		let metadata = build.metadata.clone();
+
+		let compute = sybil_pow::Compute {
+			pre_hash: metadata.pre_hash,
+			difficulty: metadata.difficulty,
+			nonce,
+		};
+
+		let work = sp_core::U256::from(&*sha3::Sha3_256::digest(&compute.encode()[..]));
+
+		let (_, overflowed) = work.overflowing_mul(metadata.difficulty);
+
+		if !overflowed {
+			let seal = sybil_pow::SybilSeal { nonce, difficulty: metadata.difficulty };
+
+			let _ = build.sender.send(seal.encode()).await;
+			println!("thread {} submitted seal for {}", num, metadata.pre_hash);
+		}
+	}
 }
