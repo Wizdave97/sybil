@@ -1,7 +1,6 @@
 //! Service and ServiceFactory implementation. Specialized wrapper over substrate service.
 
 use codec::Encode;
-use futures::executor::block_on;
 use rand::RngCore;
 use sc_client_api::ExecutorProvider;
 use sc_consensus::LongestChain;
@@ -15,10 +14,8 @@ use sp_consensus::CanAuthorWithNativeVersion;
 use sp_core::{H256, U256};
 use sp_inherents::CreateInherentDataProviders;
 use sp_runtime::{traits::IdentifyAccount, MultiSigner};
-use std::thread;
 use std::{sync::Arc, time::Duration};
 use sybil_runtime::{self, opaque::Block, RuntimeApi};
-use tokio_stream::{wrappers::WatchStream, StreamExt};
 
 pub type Executor = sc_executor::NativeElseWasmExecutor<ExecutorDispatch>;
 pub struct ExecutorDispatch;
@@ -252,7 +249,7 @@ pub fn new_full(config: Configuration) -> Result<TaskManager, ServiceError> {
 			.into_account()
 			.encode();
 
-		let (rx, authorship_task) = sc_consensus_pow::start_mining_worker(
+		let authorship_task = sc_consensus_pow::start_mining_worker(
 			Box::new(pow_block_import),
 			client.clone(),
 			select_chain,
@@ -267,35 +264,9 @@ pub fn new_full(config: Configuration) -> Result<TaskManager, ServiceError> {
 			},
 			Duration::from_secs(10),
 			can_author_with,
+			12,
+			compute
 		);
-
-		for thread_id in 0..4 {
-			let rx_clone = rx.clone();
-			thread::spawn(move || {
-				use futures_lite::future::poll_once;
-				let mut stream = WatchStream::new(rx_clone);
-				let mut item = futures::executor::block_on(stream.next()).flatten();
-
-				// todo: benchmark the advantage of spin_on vs block_on.
-				spin_on::spin_on(async {
-					loop {
-						// figured  it out, we simply have to check once if there's a new item
-						// in the stream, otherwise we run compute in a hot loop
-						// this ensures that when a new block comes in, we immediately start building on it
-						if let Some(Some(new_item)) = poll_once(stream.next()).await {
-							item = new_item;
-							println!(
-								"thread {} got data: {:?}",
-								thread_id,
-								item.as_ref().map(|d| d.metadata.pre_hash)
-							);
-						}
-
-						compute(&item, thread_id).await
-					}
-				});
-			});
-		}
 
 		task_manager.spawn_handle().spawn("mining-task", authorship_task);
 	}
@@ -304,28 +275,24 @@ pub fn new_full(config: Configuration) -> Result<TaskManager, ServiceError> {
 	Ok(task_manager)
 }
 
-pub async fn compute(build: &Option<MiningData<H256, U256>>, num: i32) {
-	if let Some(build) = build {
-		let mut rand = rand::thread_rng();
-		let mut nonce = sp_core::H256::default();
-		rand.fill_bytes(&mut nonce[..]);
-		let metadata = build.metadata.clone();
+pub fn compute(build: &MiningData<H256, U256>) -> Option<sp_consensus_pow::Seal> {
+	let mut rand = rand::thread_rng();
+	let mut nonce = sp_core::H256::default();
+	rand.fill_bytes(&mut nonce[..]);
+	let metadata = build.metadata.clone();
 
-		let compute = sybil_pow::Compute {
-			pre_hash: metadata.pre_hash,
-			difficulty: metadata.difficulty,
-			nonce,
-		};
+	let compute =
+		sybil_pow::Compute { pre_hash: metadata.pre_hash, difficulty: metadata.difficulty, nonce };
 
-		let work = sp_core::U256::from(&*sha3::Sha3_256::digest(&compute.encode()[..]));
+	let work = sp_core::U256::from(&*sha3::Sha3_256::digest(&compute.encode()[..]));
 
-		let (_, overflowed) = work.overflowing_mul(metadata.difficulty);
+	let (_, overflowed) = work.overflowing_mul(metadata.difficulty);
 
-		if !overflowed {
-			let seal = sybil_pow::SybilSeal { nonce, difficulty: metadata.difficulty };
+	if !overflowed {
+		let seal = sybil_pow::SybilSeal { nonce, difficulty: metadata.difficulty };
 
-			let _ = build.sender.send(seal.encode()).await;
-			println!("thread {} submitted seal for {}", num, metadata.pre_hash);
-		}
+		return Some(seal.encode());
 	}
+
+	None
 }
