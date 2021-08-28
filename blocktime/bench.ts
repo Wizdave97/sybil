@@ -1,4 +1,7 @@
 import { ApiPromise, WsProvider } from "@polkadot/api";
+import fs from "fs";
+import os from "os";
+import path from "path";
 
 async function main() {
   const provider = new WsProvider("ws://127.0.0.1:9944");
@@ -7,7 +10,7 @@ async function main() {
   });
   let last_block_time = unix_seconds();
   let blocktimes: number[] = [];
-  await api.rpc.chain.subscribeNewHeads(() => {
+  const unsubscribe = await api.rpc.chain.subscribeNewHeads(() => {
     const now = unix_seconds();
     const new_time = now - last_block_time;
     console.log(`blocktime: ${new_time}s\n`);
@@ -16,6 +19,22 @@ async function main() {
   });
   blocktimes.shift();
   console.log(`block times: ${blocktimes}\n\n`);
+
+  const interval = setInterval(() => {
+    if (blocktimes.length >= 20) {
+      const lines = blocktimes.join("\n");
+      const cpus = os.cpus();
+      const platform = os.platform();
+      const mem = os.totalmem() / 1000000000;
+      const systemInfo = `${platform}\n${cpus[0].model}\n ${cpus.length} cores\nTotal memory: ${mem}gb`;
+      fs.writeFileSync(
+        path.join(__dirname, `/mining_worker_benchmark_${Date.now()}`),
+        `${systemInfo}\nDifficulty:1_000_000_000\nBlock times(seconds)\n${lines}`
+      );
+      unsubscribe();
+      clearInterval(interval);
+    }
+  }, 500);
 }
 
 const unix_seconds = () => Date.now() / 1000;
