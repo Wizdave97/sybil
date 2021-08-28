@@ -264,7 +264,7 @@ pub fn new_full(config: Configuration) -> Result<TaskManager, ServiceError> {
 			},
 			Duration::from_secs(10),
 			can_author_with,
-			12,
+			8,
 			compute
 		);
 
