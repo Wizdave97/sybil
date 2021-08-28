@@ -1,8 +1,12 @@
-linux
+Platform: linux
 Intel(R) Core(TM) i5-9300H CPU @ 2.40GHz
- 8 cores
+ 4 cores, 8 threads
+
 Total memory: 25.047011328gb
+
+Benchmarked with 8 threads
 Difficulty:1_000_000_000
+
 Block times (seconds)
 691.5700001716614
 9.455999851226807
@@ -23,4 +27,6 @@ Block times (seconds)
 389.3139998912811
 45.00600004196167
 105.22699999809265
-644.2860000133514
+
+Average block time: 346.687263162512
+

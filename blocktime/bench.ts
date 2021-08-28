@@ -17,19 +17,21 @@ async function main() {
     blocktimes.push(new_time);
     last_block_time = now;
   });
-  blocktimes.shift();
+  
   console.log(`block times: ${blocktimes}\n\n`);
 
   const interval = setInterval(() => {
-    if (blocktimes.length >= 20) {
+    if (blocktimes.length >= 21) {
+      blocktimes.shift();
       const lines = blocktimes.join("\n");
       const cpus = os.cpus();
       const platform = os.platform();
       const mem = os.totalmem() / 1000000000;
       const systemInfo = `${platform}\n${cpus[0].model}\n ${cpus.length} cores\nTotal memory: ${mem}gb`;
+      const avgBlocktime = blocktimes.reduce((acc, t) => acc + t, 0) / blocktimes.length
       fs.writeFileSync(
         path.join(__dirname, `/mining_worker_benchmark_${Date.now()}`),
-        `${systemInfo}\nDifficulty:1_000_000_000\nBlock times(seconds)\n${lines}`
+        `${systemInfo}\nDifficulty:1_000_000_000\nBlock times(seconds)\n${lines}\n\nAverage block time: ${avgBlocktime}`
       );
       unsubscribe();
       clearInterval(interval);
