@@ -6807,6 +6807,7 @@ dependencies = [
  "frame-benchmarking",
  "frame-benchmarking-cli",
  "futures 0.3.16",
+ "futures-lite",
  "jsonrpc-core",
  "pallet-transaction-payment-rpc",
  "parity-scale-codec",
@@ -6830,6 +6831,7 @@ dependencies = [
  "sp-block-builder",
  "sp-blockchain",
  "sp-consensus",
+ "sp-consensus-pow",
  "sp-core",
  "sp-finality-grandpa",
  "sp-inherents",
@@ -6841,6 +6843,7 @@ dependencies = [
  "substrate-frame-rpc-system",
  "sybil-pow",
  "sybil-runtime",
+ "tokio",
  "tokio-stream",
 ]
 
