@@ -14,8 +14,9 @@ use sp_consensus::CanAuthorWithNativeVersion;
 use sp_core::{H256, U256};
 use sp_inherents::CreateInherentDataProviders;
 use sp_runtime::{traits::IdentifyAccount, MultiSigner};
-use std::{sync::Arc, time::Duration};
+use std::{hint, sync::Arc, thread, time::Duration};
 use sybil_runtime::{self, opaque::Block, RuntimeApi};
+use futures::{StreamExt, executor::block_on};
 
 pub type Executor = sc_executor::NativeElseWasmExecutor<ExecutorDispatch>;
 pub struct ExecutorDispatch;
@@ -249,7 +250,7 @@ pub fn new_full(config: Configuration) -> Result<TaskManager, ServiceError> {
 			.into_account()
 			.encode();
 
-		let authorship_task = sc_consensus_pow::start_mining_worker(
+		let (mining_metadata_stream, task) = sc_consensus_pow::start_mining_worker(
 			Box::new(pow_block_import),
 			client.clone(),
 			select_chain,
@@ -263,12 +264,46 @@ pub fn new_full(config: Configuration) -> Result<TaskManager, ServiceError> {
 				Ok(provider)
 			},
 			Duration::from_secs(10),
-			can_author_with,
-			8,
-			compute
+			can_author_with
 		);
 
-		task_manager.spawn_handle().spawn("mining-task", authorship_task);
+		for _ in 0..8 {
+			let mut stream = mining_metadata_stream.clone();
+			thread::spawn(move || {
+				use futures_lite::future::poll_once;
+				let mut item = futures::executor::block_on(stream.next()).flatten();
+
+				block_on(async {
+					loop {
+						// figured  it out, we simply have to check once if there's a new item
+						// in the stream, otherwise we run compute in a hot loop
+						// this ensures that when a new block comes in, we immediately start building on it
+						
+						match poll_once(stream.next()).await {
+							Some(Some(new_item)) => {
+								item = new_item;
+							}
+							// stream has ended, shutdown this thread
+							Some(None) => {
+								return
+							},
+							_ => {}
+						}
+	
+						if let Some(ref build) = item {
+							if let Some(seal) = compute(build) {
+								let _ = build.sender.send(seal).await;
+							}
+						}
+						// machine instruction that tells the cpu, we're in a hot loop.
+						// and cpu can optimize for it.
+						hint::spin_loop();
+					}
+				});
+			});
+		}
+
+		task_manager.spawn_handle().spawn("mining-task", task);
 	}
 
 	network_starter.start_network();
