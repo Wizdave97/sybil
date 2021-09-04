@@ -250,7 +250,7 @@ pub fn new_full(config: Configuration) -> Result<TaskManager, ServiceError> {
 			.into_account()
 			.encode();
 
-		let (mining_metadata_stream, task) = sc_consensus_pow::start_mining_worker(
+		let (mining_data_stream, task) = sc_consensus_pow::start_mining_worker(
 			Box::new(pow_block_import),
 			client.clone(),
 			select_chain,
@@ -268,20 +268,21 @@ pub fn new_full(config: Configuration) -> Result<TaskManager, ServiceError> {
 		);
 
 		for _ in 0..8 {
-			let mut stream = mining_metadata_stream.clone();
+			let mut stream = mining_data_stream.clone();
 			thread::spawn(move || {
 				use futures_lite::future::poll_once;
-				let mut item = futures::executor::block_on(stream.next()).flatten();
-
+				let mut item = futures::executor::block_on(stream.next());
+				
 				block_on(async {
 					loop {
+						
 						// figured  it out, we simply have to check once if there's a new item
 						// in the stream, otherwise we run compute in a hot loop
 						// this ensures that when a new block comes in, we immediately start building on it
 						
 						match poll_once(stream.next()).await {
 							Some(Some(new_item)) => {
-								item = new_item;
+								item = Some(new_item);
 							}
 							// stream has ended, shutdown this thread
 							Some(None) => {
